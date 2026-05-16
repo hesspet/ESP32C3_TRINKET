@@ -93,7 +93,13 @@ SPI3_HOST = 2
 #endif
 
 // Processor specific code used by SPI bus transaction startWrite and endWrite functions
-#if !defined (ESP32_PARALLEL)
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+  // Arduino-ESP32 2.x kann auf dem ESP32-C3 beim direkten Schreiben auf SPI_USER_REG
+  // einen Store-Access-Fault ausloesen. Der SPI-Bus ist fuer diese App nur im
+  // Schreibmodus aktiv, daher ist die explizite Umschaltung hier nicht notwendig.
+  #define SET_BUS_WRITE_MODE
+  #define SET_BUS_READ_MODE
+#elif !defined (ESP32_PARALLEL)
   #if (TFT_SPI_MODE == SPI_MODE1) || (TFT_SPI_MODE == SPI_MODE2)
     #define SET_BUS_WRITE_MODE *_spi_user = SPI_USR_MOSI | SPI_CK_OUT_EDGE
     #define SET_BUS_READ_MODE  *_spi_user = SPI_USR_MOSI | SPI_USR_MISO | SPI_DOUTDIN | SPI_CK_OUT_EDGE
@@ -116,7 +122,12 @@ SPI3_HOST = 2
   #define DMA_BUSY_CHECK
 #endif
 
-#if defined(TFT_PARALLEL_8_BIT)
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+  // Direkte Registerabfragen ueber _spi_cmd sind mit dem Arduino-SPI-Pfad auf
+  // diesem ESP32-C3 nicht initialisiert. spi.transfer() wartet bereits auf das
+  // Ende der Uebertragung.
+  #define SPI_BUSY_CHECK
+#elif defined(TFT_PARALLEL_8_BIT)
   #define SPI_BUSY_CHECK
 #else
   #define SPI_BUSY_CHECK while (*_spi_cmd&SPI_USR)
@@ -531,19 +542,23 @@ SPI3_HOST = 2
   #define tft_Write_32D(C) TFT_WRITE_BITS((uint16_t)((C)<<8 | (C)>>8)<<16 | (uint16_t)((C)<<8 | (C)>>8), 32)
 //*/
 //* Replacement slimmer macros
-  #if !defined(CONFIG_IDF_TARGET_ESP32C3)
-    #define TFT_WRITE_BITS(D, B) *_spi_mosi_dlen = B-1;  \
-                               *_spi_w = D;              \
-                               *_spi_cmd = SPI_USR;      \
-                        while (*_spi_cmd & SPI_USR);
+  #if defined(CONFIG_IDF_TARGET_ESP32C3)
+    // Direkte SPI-Registerzugriffe fuehren mit dem verwendeten Arduino-ESP32-Core
+    // auf dem ESP32-C3 zu Store-Access-Faults. Fuer das 128x128-Display reichen die
+    // stabilen Arduino-SPI-Schreibfunktionen aus.
+    #define tft_Write_8(C)   spi.transfer((uint8_t)(C))
+    #define tft_Write_16(C)  spi.transfer((uint8_t)((C) >> 8)); spi.transfer((uint8_t)(C))
+    #define tft_Write_16N(C) tft_Write_16(C)
+    #define tft_Write_16S(C) spi.transfer((uint8_t)(C)); spi.transfer((uint8_t)((C) >> 8))
+    #define tft_Write_32(C)  spi.write32(C)
+    #define tft_Write_32C(C,D) tft_Write_16(C); tft_Write_16(D)
+    #define tft_Write_32D(C) tft_Write_16(C); tft_Write_16(C)
   #else
     #define TFT_WRITE_BITS(D, B) *_spi_mosi_dlen = B-1;  \
                                *_spi_w = D;              \
-                               *_spi_cmd = SPI_UPDATE;   \
-                        while (*_spi_cmd & SPI_UPDATE);  \
                                *_spi_cmd = SPI_USR;      \
                         while (*_spi_cmd & SPI_USR);
-  #endif
+
   // Write 8 bits
   #define tft_Write_8(C) TFT_WRITE_BITS(C, 8)
 
@@ -551,17 +566,9 @@ SPI3_HOST = 2
   #define tft_Write_16(C) TFT_WRITE_BITS((C)<<8 | (C)>>8, 16)
 
   // Future option for transfer without wait
-  #if !defined(CONFIG_IDF_TARGET_ESP32C3)
-    #define tft_Write_16N(C) *_spi_mosi_dlen = 16-1;    \
+  #define tft_Write_16N(C) *_spi_mosi_dlen = 16-1;    \
                            *_spi_w = ((C)<<8 | (C)>>8); \
                            *_spi_cmd = SPI_USR;
-  #else
-    #define tft_Write_16N(C) *_spi_mosi_dlen = 16-1;    \
-                           *_spi_w = ((C)<<8 | (C)>>8); \
-                           *_spi_cmd = SPI_UPDATE;      \
-                    while (*_spi_cmd & SPI_UPDATE);     \
-                           *_spi_cmd = SPI_USR;
-  #endif
 
   // Write 16 bits
   #define tft_Write_16S(C) TFT_WRITE_BITS(C, 16)
@@ -575,6 +582,7 @@ SPI3_HOST = 2
   // Write same value twice
   #define tft_Write_32D(C) TFT_WRITE_BITS((uint16_t)((C)<<8 | (C)>>8)<<16 | (uint16_t)((C)<<8 | (C)>>8), 32)
 
+  #endif
 //*/
 #endif
 

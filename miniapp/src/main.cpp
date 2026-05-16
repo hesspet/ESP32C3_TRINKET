@@ -10,6 +10,9 @@
 #include <TimeLib.h>
 // WLAN-Bibliothek
 #include <WiFi.h>
+// Deep-Sleep-Unterstuetzung
+#include <esp_sleep.h>
+#include <driver/gpio.h>
 // HTTP-Client fuer Web-Anfragen
 #include <HTTPClient.h>
 // UDP-Unterstuetzung fuer NTP ueber WLAN
@@ -41,6 +44,11 @@
 // WLAN-Zugangsdaten fuer das Testnetz.
 const char *ssid     = "Agathas-Netz-16";  // WLAN-Name des Testnetzes.
 const char *password = "1234567890123050363"; // WLAN-Passwort des Testnetzes.
+
+constexpr uint8_t deepSleepButtonPin = 8;
+constexpr unsigned long deepSleepButtonPressDuration = 2500;
+unsigned long deepSleepButtonPressedSince = 0;
+bool deepSleepButtonPressHandled = false;
 
 WeatherNum  wrat; // Wetteranzeige-Objekt
 int prevTime = 0;
@@ -115,6 +123,14 @@ void scrollTxt(int pos);
 String week();
 String monthDay();
 String hourMinute();
+void configureDeepSleepButton();
+void handleDeepSleepButton();
+bool isDeepSleepButtonPressed();
+void enterDeepSleep();
+void waitForDeepSleepButtonRelease();
+void prepareDisplayForDeepSleep();
+void releaseDisplayResetHold();
+void holdDisplayResetForDeepSleep();
 
 byte setNTPSyncTime = 20; // NTP-Synchronisationsintervall in Minuten.
 
@@ -505,6 +521,98 @@ void get_wifi()
   Serial.println(WiFi.localIP());
 }
 
+void configureDeepSleepButton()
+{
+  pinMode(deepSleepButtonPin, INPUT_PULLUP);
+}
+
+bool isDeepSleepButtonPressed()
+{
+  return digitalRead(deepSleepButtonPin) == LOW;
+}
+
+void handleDeepSleepButton()
+{
+  if (!isDeepSleepButtonPressed()) {
+    deepSleepButtonPressedSince = 0;
+    deepSleepButtonPressHandled = false;
+    return;
+  }
+
+  if (deepSleepButtonPressedSince == 0) {
+    deepSleepButtonPressedSince = millis();
+    return;
+  }
+
+  if (!deepSleepButtonPressHandled && millis() - deepSleepButtonPressedSince >= deepSleepButtonPressDuration) {
+    deepSleepButtonPressHandled = true;
+    enterDeepSleep();
+  }
+}
+
+void waitForDeepSleepButtonRelease()
+{
+  while (isDeepSleepButtonPressed()) {
+    delay(20);
+  }
+  delay(150);
+}
+
+void prepareDisplayForDeepSleep()
+{
+  tft.fillScreen(TFT_BLACK);
+  delay(80);
+  tft.writecommand(ST7735_DISPOFF);
+  delay(120);
+  tft.writecommand(ST7735_SLPIN);
+  delay(120);
+  holdDisplayResetForDeepSleep();
+}
+
+void releaseDisplayResetHold()
+{
+#if defined(TFT_RST) && (TFT_RST >= 0)
+  gpio_deep_sleep_hold_dis();
+  gpio_hold_dis((gpio_num_t)TFT_RST);
+  pinMode(TFT_RST, OUTPUT);
+  digitalWrite(TFT_RST, HIGH);
+  delay(5);
+#endif
+}
+
+void holdDisplayResetForDeepSleep()
+{
+#if defined(TFT_RST) && (TFT_RST >= 0)
+  pinMode(TFT_RST, OUTPUT);
+  digitalWrite(TFT_RST, LOW);
+  gpio_hold_en((gpio_num_t)TFT_RST);
+  gpio_deep_sleep_hold_en();
+#endif
+}
+
+void enterDeepSleep()
+{
+  Serial.println("DeepSleep wird vorbereitet.");
+
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextDatum(CC_DATUM);
+  tft.drawString("Schlafmodus", 64, 42, 2);
+  tft.drawString("Taste loslassen", 64, 64, 2);
+  tft.drawString("IO8 weckt auf", 64, 86, 2);
+
+  delay(700);
+  waitForDeepSleepButtonRelease();
+
+  prepareDisplayForDeepSleep();
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  Serial.flush();
+
+  esp_deep_sleep_enable_gpio_wakeup(1ULL << deepSleepButtonPin, ESP_GPIO_WAKEUP_GPIO_LOW);
+  esp_deep_sleep_start();
+}
+
 
 //---------------------------------------------------------------------------
 void setup() {
@@ -512,6 +620,8 @@ void setup() {
          Serial.begin(115200);
          delay(200);
          Serial.println("Start: Setup beginnt.");
+         configureDeepSleepButton();
+         releaseDisplayResetHold();
          EEPROM.begin(1024);
          Serial.println("Start: EEPROM initialisiert.");
 
@@ -610,6 +720,7 @@ void setup() {
 
 unsigned long weaterTime = 0;
 void loop() {
+                handleDeepSleepButton();
   
                 if (now() != prevDisplay) {
                 prevDisplay = now();

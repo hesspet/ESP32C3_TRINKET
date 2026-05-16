@@ -250,6 +250,16 @@ void TFT_eSPI::pushBlock(uint16_t color, uint32_t len){
 //*
 void TFT_eSPI::pushBlock(uint16_t color, uint32_t len){
 
+#if CONFIG_IDF_TARGET_ESP32C3
+  uint8_t highByte = (uint8_t)(color >> 8);
+  uint8_t lowByte = (uint8_t)color;
+  while (len--) {
+    spi.transfer(highByte);
+    spi.transfer(lowByte);
+  }
+  return;
+#endif
+
   volatile uint32_t* spi_w = _spi_w;
   uint32_t color32 = (color<<8 | color >>8)<<16 | (color<<8 | color >>8);
   uint32_t i = 0;
@@ -297,6 +307,14 @@ void TFT_eSPI::pushBlock(uint16_t color, uint32_t len){
 ***************************************************************************************/
 void TFT_eSPI::pushSwapBytePixels(const void* data_in, uint32_t len){
 
+#if CONFIG_IDF_TARGET_ESP32C3
+  const uint8_t* data = (const uint8_t*)data_in;
+  while (len--) {
+    spi.transfer(*data++);
+    spi.transfer(*data++);
+  }
+  return;
+#else
   uint8_t* data = (uint8_t*)data_in;
   uint32_t color[16];
 
@@ -378,6 +396,7 @@ void TFT_eSPI::pushSwapBytePixels(const void* data_in, uint32_t len){
   }
   while (READ_PERI_REG(SPI_CMD_REG(SPI_PORT))&SPI_USR);
 
+#endif
 }
 
 /***************************************************************************************
@@ -391,6 +410,14 @@ void TFT_eSPI::pushPixels(const void* data_in, uint32_t len){
     return;
   }
 
+#if CONFIG_IDF_TARGET_ESP32C3
+  const uint8_t* data = (const uint8_t*)data_in;
+  while (len--) {
+    spi.transfer(*data++);
+    spi.transfer(*data++);
+  }
+  return;
+#else
   uint32_t *data = (uint32_t*)data_in;
 
   if (len > 31)
@@ -436,6 +463,7 @@ void TFT_eSPI::pushPixels(const void* data_in, uint32_t len){
     SET_PERI_REG_MASK(SPI_CMD_REG(SPI_PORT), SPI_USR);
   }
   while (READ_PERI_REG(SPI_CMD_REG(SPI_PORT))&SPI_USR);
+#endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////
